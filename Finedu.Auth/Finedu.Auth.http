@@ -1,0 +1,6 @@
+@Finedu.Auth_HostAddress = http://localhost:5280
+
+GET {{Finedu.Auth_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
