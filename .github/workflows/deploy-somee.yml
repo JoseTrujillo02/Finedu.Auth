@@ -1,0 +1,48 @@
+name: Deploy API to Somee via FTP
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore Finedu.Auth.sln
+
+      - name: Build project
+        run: dotnet build Finedu.Auth.sln --configuration Release --no-restore
+
+      - name: Publish for IIS
+        run: >
+          dotnet publish ./Finedu.Auth/Finedu.Auth.csproj
+          -c Release
+          -o ./publish
+          -p:PublishIISAssets=true
+
+      - name: Deploy to Somee via FTP (with exposed credentials)
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+        with:
+          server: ftp://fineduauth.somee.com/www.fineduauth.somee.com
+          username: cid919310uttt1
+          password: Cid919310$
+          protocol: ftp
+          local-dir: ./publish/
+          server-dir: /www.fineduauth.somee.com/
+          exclude: |
+            **/.git*
+            **/.github/**
+          dangerous-clean-slate: false
