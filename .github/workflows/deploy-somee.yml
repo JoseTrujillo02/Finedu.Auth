@@ -31,46 +31,29 @@ jobs:
           -o ./publish
           -p:PublishIISAssets=true
 
-      # 1) Escribir la credencial de Firebase (desde el Secret) como archivo en ./publish
-      - name: Write Firebase service account (FIREBASE_KEY) to file
+      # === Firebase Admin: escribir el JSON desde el secret ===
+      - name: Write Firebase service account to ./publish/secrets/serviceAccountKey.json
         shell: pwsh
         run: |
-          $path = Join-Path $PWD "publish/firebase-key.json"
-          '${{ secrets.FIREBASE_KEY }}' | Out-File -FilePath $path -Encoding utf8 -Force
+          $secretJson = @'
+          ${{ secrets.FIREBASE_KEY }}
+          '@
+          $dir = Join-Path $PWD "publish/secrets"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $path = Join-Path $dir "serviceAccountKey.json"
+          $secretJson | Out-File -FilePath $path -Encoding utf8 -Force
+          Write-Host "Firebase key written to $path"
 
-      # 2) Inyectar GOOGLE_APPLICATION_CREDENTIALS en web.config (IIS)
-      - name: Inject GOOGLE_APPLICATION_CREDENTIALS into web.config
+      # Comprobación: el archivo existe y es JSON válido
+      - name: Validate firebase key file
         shell: pwsh
         run: |
-          $webConfigPath = Join-Path $PWD "publish/web.config"
-          if (!(Test-Path $webConfigPath)) {
-            Write-Error "web.config not found at $webConfigPath. Ensure -p:PublishIISAssets=true"
-          }
-          [xml]$xml = Get-Content $webConfigPath
-          $asp = $xml.configuration.'system.webServer'.aspNetCore
-          if (-not $asp) { Throw "aspNetCore element not found in web.config" }
+          $path = Join-Path $PWD "publish/secrets/serviceAccountKey.json"
+          if (!(Test-Path $path)) { throw "serviceAccountKey.json not found" }
+          try { $null = Get-Content $path | ConvertFrom-Json } catch { throw "FIREBASE_KEY is not valid JSON" }
+          Write-Host "serviceAccountKey.json exists and is valid JSON."
 
-          if (-not $asp.environmentVariables) {
-            $envNode = $xml.CreateElement("environmentVariables")
-            [void]$asp.AppendChild($envNode)
-          } else {
-            $envNode = $asp.environmentVariables
-          }
-
-          $existing = $envNode.SelectNodes("add") | Where-Object { $_.name -eq 'GOOGLE_APPLICATION_CREDENTIALS' }
-          if ($existing) {
-            $existing.value = ".\firebase-key.json"
-          } else {
-            $add = $xml.CreateElement("add")
-            $add.SetAttribute("name", "GOOGLE_APPLICATION_CREDENTIALS")
-            $add.SetAttribute("value", ".\firebase-key.json")
-            [void]$envNode.AppendChild($add)
-          }
-
-          $xml.Save($webConfigPath)
-          Write-Host "Injected GOOGLE_APPLICATION_CREDENTIALS into web.config"
-
-      # (Opcional) Prueba rápida de conexión FTP
+      # (Opcional) Preflight FTP
       - name: FTP preflight check
         shell: bash
         run: |
@@ -78,12 +61,11 @@ jobs:
             ftp://fineduauth.somee.com \
             --user 'cid919310uttt1:Cid919310$' || true
 
-      # 3) Deploy a Somee
+      # === Deploy a Somee por FTP ===
       - name: Deploy to Somee via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
         with:
-          # SOLO el host, sin 'ftp://'
-          server: fineduauth.somee.com
+          server: fineduauth.somee.com      # solo el host
           username: cid919310uttt1
           password: Cid919310$
           protocol: ftp
