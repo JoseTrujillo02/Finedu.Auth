@@ -2,9 +2,7 @@ name: Deploy API to Somee via FTP
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
@@ -20,29 +18,41 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      - name: Restore dependencies
+      - name: Restore
         run: dotnet restore Finedu.Auth.sln
 
-      - name: Build project
-        run: dotnet build Finedu.Auth.sln --configuration Release --no-restore
+      - name: Build
+        run: dotnet build Finedu.Auth.sln -c Release --no-restore
 
-      - name: Publish for IIS
+      - name: Publish for IIS (includes web.config)
         run: >
           dotnet publish ./Finedu.Auth/Finedu.Auth.csproj
           -c Release
           -o ./publish
           -p:PublishIISAssets=true
 
-      - name: Deploy to Somee via FTP (with exposed credentials)
+      # (Opcional) Prueba rápida de conexión FTP
+      - name: FTP preflight check
+        shell: bash
+        run: |
+          curl -v --disable-epsv --ftp-pasv \
+            ftp://fineduauth.somee.com \
+            --user 'cid919310uttt1:Cid919310$' || true
+
+      - name: Deploy to Somee via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
         with:
-          server: ftp://fineduauth.somee.com/www.fineduauth.somee.com
+          # IMPORTANTE: sólo el host, SIN "ftp://"
+          server: fineduauth.somee.com
           username: cid919310uttt1
           password: Cid919310$
           protocol: ftp
+          port: 21
           local-dir: ./publish/
+          # La ruta de tu panel
           server-dir: /www.fineduauth.somee.com/
           exclude: |
             **/.git*
             **/.github/**
+          # No borrar todo en el servidor
           dangerous-clean-slate: false
