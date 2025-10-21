@@ -65,7 +65,7 @@ app.UseAuthorization();
 app.MapControllers(); // si usas controllers
 
 // Minimal endpoints de ejemplo
-app.MapGet("/", () => Results.Ok(new { message = "API de autenticación con Firebase" }));
+app.MapGet("/", () => Results.Ok(new { message = "API de autenticaciÃ³n con Firebase" }));
 
 app.MapGet("/secure/profile", (ClaimsPrincipal user) =>
 {
@@ -78,5 +78,13 @@ app.MapGet("/secure/profile", (ClaimsPrincipal user) =>
 
     return Results.Ok(new { uid, email, name });
 }).RequireAuthorization();
+app.MapGet("/debug/env", () =>
+{
+    var content = builder.Environment.ContentRootPath;
+    var path = Path.Combine(content, "secrets", "serviceAccountKey.json");
+    var exists = System.IO.File.Exists(path);
+    return Results.Ok(new { contentRootPath = content, jsonPath = path, fileExists = exists });
+});
+
 
 app.Run();
