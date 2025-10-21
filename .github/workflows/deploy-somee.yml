@@ -31,8 +31,8 @@ jobs:
           -o ./publish
           -p:PublishIISAssets=true
 
-      # === Firebase Admin: escribir el JSON desde el secret ===
-      - name: Write Firebase service account to ./publish/secrets/serviceAccountKey.json
+      # === Firebase Admin: escribir el JSON desde el secret (para publicación) ===
+      - name: Write Firebase key to ./publish/secrets/serviceAccountKey.json
         shell: pwsh
         run: |
           $secretJson = @'
@@ -42,16 +42,49 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           $path = Join-Path $dir "serviceAccountKey.json"
           $secretJson | Out-File -FilePath $path -Encoding utf8 -Force
-          Write-Host "Firebase key written to $path"
+          # Validar JSON
+          try { Get-Content $path | ConvertFrom-Json | Out-Null } catch { throw "FIREBASE_KEY is not valid JSON" }
+          Write-Host "Firebase key written and validated at $path"
 
-      # Comprobación: el archivo existe y es JSON válido
-      - name: Validate firebase key file
+      # === Firebase Admin: también para ejecución local (smoke test offline) ===
+      - name: Write Firebase key to ./Finedu.Auth/secrets/serviceAccountKey.json (local run)
         shell: pwsh
         run: |
-          $path = Join-Path $PWD "publish/secrets/serviceAccountKey.json"
-          if (!(Test-Path $path)) { throw "serviceAccountKey.json not found" }
-          try { $null = Get-Content $path | ConvertFrom-Json } catch { throw "FIREBASE_KEY is not valid JSON" }
-          Write-Host "serviceAccountKey.json exists and is valid JSON."
+          $secretJson = @'
+          ${{ secrets.FIREBASE_KEY }}
+          '@
+          $dir = Join-Path $PWD "Finedu.Auth/secrets"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $path = Join-Path $dir "serviceAccountKey.json"
+          $secretJson | Out-File -FilePath $path -Encoding utf8 -Force
+          try { Get-Content $path | ConvertFrom-Json | Out-Null } catch { throw "FIREBASE_KEY (local) is not valid JSON" }
+          Write-Host "Firebase key written and validated at $path"
+
+      # === SMOKE TEST OFFLINE: levantar la API localmente y probar GET / ===
+      - name: Offline smoke test (run API locally and GET /)
+        shell: pwsh
+        env:
+          ASPNETCORE_URLS: http://localhost:5088
+        run: |
+          # Iniciar el servicio en background
+          $p = Start-Process -FilePath "dotnet" -ArgumentList "run --project .\Finedu.Auth\Finedu.Auth.csproj --urls http://localhost:5088" -PassThru
+          try {
+            Start-Sleep -Seconds 8
+            Write-Host "Haciendo request a http://localhost:5088/ ..."
+            $resp = Invoke-RestMethod -Uri "http://localhost:5088/" -Method GET -TimeoutSec 20
+            Write-Host "Respuesta raíz:" ($resp | ConvertTo-Json -Depth 5)
+
+            # (Opcional) puedes descomentar si tienes /debug/env
+            # $envResp = Invoke-RestMethod -Uri "http://localhost:5088/debug/env" -Method GET -TimeoutSec 20
+            # Write-Host "Debug env:" ($envResp | ConvertTo-Json -Depth 5)
+          }
+          catch {
+            Write-Error "Smoke test FAILED: $($_.Exception.Message)"
+            throw
+          }
+          finally {
+            if ($p -and !$p.HasExited) { Stop-Process -Id $p.Id -Force }
+          }
 
       # (Opcional) Preflight FTP
       - name: FTP preflight check
@@ -61,11 +94,11 @@ jobs:
             ftp://fineduauth.somee.com \
             --user 'cid919310uttt1:Cid919310$' || true
 
-      # === Deploy a Somee por FTP ===
+      # === Deploy a Somee por FTP (solo si smoke test pasó) ===
       - name: Deploy to Somee via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
         with:
-          server: fineduauth.somee.com      # solo el host
+          server: fineduauth.somee.com
           username: cid919310uttt1
           password: Cid919310$
           protocol: ftp
