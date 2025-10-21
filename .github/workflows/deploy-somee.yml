@@ -46,56 +46,37 @@ jobs:
           try { Get-Content $path | ConvertFrom-Json | Out-Null } catch { throw "FIREBASE_KEY is not valid JSON" }
           Write-Host "Firebase key written and validated at $path"
 
-      # === Firebase Admin: también para ejecución local (smoke test offline) ===
-      - name: Write Firebase key to ./Finedu.Auth/secrets/serviceAccountKey.json (local run)
+      # === Subir app_offline.htm para descargar la app en IIS y liberar locks ===
+      - name: Create app_offline.htm
         shell: pwsh
         run: |
-          $secretJson = @'
-          ${{ secrets.FIREBASE_KEY }}
-          '@
-          $dir = Join-Path $PWD "Finedu.Auth/secrets"
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $path = Join-Path $dir "serviceAccountKey.json"
-          $secretJson | Out-File -FilePath $path -Encoding utf8 -Force
-          try { Get-Content $path | ConvertFrom-Json | Out-Null } catch { throw "FIREBASE_KEY (local) is not valid JSON" }
-          Write-Host "Firebase key written and validated at $path"
+          $tmp = Join-Path $PWD "tmp-offline"
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          @"
+          <html><head><meta charset='utf-8'><title>En mantenimiento</title></head>
+          <body style='font-family:sans-serif'>
+            <h2>Desplegando nueva versión...</h2>
+            <p>Intenta de nuevo en unos segundos.</p>
+          </body></html>
+          "@ | Out-File -FilePath (Join-Path $tmp "app_offline.htm") -Encoding utf8 -Force
 
-      # === SMOKE TEST OFFLINE: levantar la API localmente y probar GET / ===
-      - name: Offline smoke test (run API locally and GET /)
-        shell: pwsh
-        env:
-          ASPNETCORE_URLS: http://localhost:5088
-        run: |
-          # Iniciar el servicio en background
-          $p = Start-Process -FilePath "dotnet" -ArgumentList "run --project .\Finedu.Auth\Finedu.Auth.csproj --urls http://localhost:5088" -PassThru
-          try {
-            Start-Sleep -Seconds 8
-            Write-Host "Haciendo request a http://localhost:5088/ ..."
-            $resp = Invoke-RestMethod -Uri "http://localhost:5088/" -Method GET -TimeoutSec 20
-            Write-Host "Respuesta raíz:" ($resp | ConvertTo-Json -Depth 5)
+      - name: Upload app_offline.htm (take app offline)
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+        with:
+          server: fineduauth.somee.com
+          username: cid919310uttt1
+          password: Cid919310$
+          protocol: ftp
+          port: 21
+          local-dir: ./tmp-offline/
+          server-dir: /www.fineduauth.somee.com/
+          dangerous-clean-slate: false
 
-            # (Opcional) puedes descomentar si tienes /debug/env
-            # $envResp = Invoke-RestMethod -Uri "http://localhost:5088/debug/env" -Method GET -TimeoutSec 20
-            # Write-Host "Debug env:" ($envResp | ConvertTo-Json -Depth 5)
-          }
-          catch {
-            Write-Error "Smoke test FAILED: $($_.Exception.Message)"
-            throw
-          }
-          finally {
-            if ($p -and !$p.HasExited) { Stop-Process -Id $p.Id -Force }
-          }
+      - name: Wait for IIS to unload app
+        run: powershell -Command "Start-Sleep -Seconds 8"
 
-      # (Opcional) Preflight FTP
-      - name: FTP preflight check
-        shell: bash
-        run: |
-          curl -v --disable-epsv --ftp-pasv \
-            ftp://fineduauth.somee.com \
-            --user 'cid919310uttt1:Cid919310$' || true
-
-      # === Deploy a Somee por FTP (solo si smoke test pasó) ===
-      - name: Deploy to Somee via FTP
+      # === Deploy del sitio ya con la app descargada ===
+      - name: Deploy to Somee via FTP (site files)
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
         with:
           server: fineduauth.somee.com
@@ -108,4 +89,36 @@ jobs:
           exclude: |
             **/.git*
             **/.github/**
+            logs/**
           dangerous-clean-slate: false
+
+      # === Borrar app_offline.htm para volver a levantar la app ===
+      - name: Remove app_offline.htm (bring app online)
+        shell: pwsh
+        run: |
+          $user = "cid919310uttt1"
+          $pass = "Cid919310$"
+          $uri = "ftp://fineduauth.somee.com/www.fineduauth.somee.com/app_offline.htm"
+          $wc = New-Object System.Net.WebClient
+          $wc.Credentials = New-Object System.Net.NetworkCredential($user, $pass)
+          # En FTP, borrar = método WebRequest manual
+          $req = [System.Net.FtpWebRequest]::Create($uri)
+          $req.Method = [System.Net.WebRequestMethods+Ftp]::DeleteFile
+          $req.Credentials = $wc.Credentials
+          $req.UseBinary = $true
+          $req.UsePassive = $true
+          $resp = $req.GetResponse()
+          $resp.Close()
+          Write-Host "app_offline.htm deleted"
+
+      # (Opcional) Preflight GET /
+      - name: Verify home after deploy
+        shell: pwsh
+        run: |
+          try {
+            Start-Sleep -Seconds 3
+            $resp = Invoke-WebRequest -Uri "http://www.fineduauth.somee.com/" -UseBasicParsing -TimeoutSec 20
+            Write-Host "Home status:" $resp.StatusCode
+          } catch {
+            Write-Warning "Home didn't respond yet, but deploy finished. It may still be spinning up."
+          }
